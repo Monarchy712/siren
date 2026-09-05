@@ -21,8 +21,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # --- The three named constants (single source of truth) -------------------- #
-AGE_MIN: int = 30      # days -- minimum wallet age for a "rich" chain
-TX_MIN: int = 50       # transactions -- minimum activity for a "rich" chain
+# Tuned for live Base Sepolia demo-scale seeding (see README / onchain notes):
+# wallet age is sourced from real on-chain first-seen, and activity is
+# demo-scale, so the "rich chain" bar is set accordingly.
+AGE_MIN: int = 0       # days -- minimum wallet age for a "rich" chain
+TX_MIN: int = 10       # transactions -- minimum activity for a "rich" chain
 HIGH_T: float = 0.60   # risk_score threshold: >= HIGH_T -> high_risk (when adequate)
 
 

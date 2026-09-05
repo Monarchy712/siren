@@ -12,6 +12,9 @@ the engine changes -- it only depends on the `BehavioralData` shape below.
 from __future__ import annotations
 
 import datetime as _dt
+import json as _json
+import os as _os
+import urllib.request as _urlreq
 from dataclasses import dataclass, asdict
 from typing import Protocol
 
@@ -49,7 +52,7 @@ class GraphClient(Protocol):
 # Deliberately-created ("pre-seeded") demo histories, keyed by provider address.
 # These mirror what the real subgraph will surface for the seeded demo wallets.
 _STUB_HISTORY: dict[str, dict] = {
-    # svc_01 -- established, honest
+    # svc_01 -- established, honest (real seeded address supplied via env at runtime)
     "0xA1b2C3d4E5f6000000000000000000000000AA01": {"wallet_age_days": 812, "tx_count": 4310, "operator_address": "0xOP0000000000000000000000000000000000AA01"},
     # svc_02 -- thin wallet hiding behind an "established" claim
     "0xA1b2C3d4E5f6000000000000000000000000BB02": {"wallet_age_days": 3,   "tx_count": 11,   "operator_address": "0xOP0000000000000000000000000000000000BB02"},
@@ -105,26 +108,212 @@ class StubGraphClient:
 # Real implementation -- TODO: wire to a live hosted subgraph.
 # --------------------------------------------------------------------------- #
 
+_BEHAVIORAL_QUERY = """
+query Behavioral($id: ID!) {
+  _meta { block { number timestamp } hasIndexingErrors }
+  account(id: $id) {
+    firstSeenBlock
+    firstSeenTimestamp
+    txCount
+    operator
+  }
+}
+""".strip()
+
+
 class SubgraphGraphClient:
     """Real behavioral source backed by a hosted subgraph (Subgraph Studio).
 
-    TODO(graph): implement against a live hosted subgraph on a Graph-supported
-    testnet. Steps to swap in:
-      1. Author/deploy a subgraph that aggregates per-wallet: first-seen block
-         (-> wallet_age_days), tx_count, and funding/posting operator address.
-      2. Set `endpoint` to the Studio query URL and `api_key` from env.
-      3. Fill `behavioral()` to POST the GraphQL query, map results into
-         BehavioralData, and stamp as_of_block/as_of_time from the response
-         (_meta.block). Set source="hosted_subgraph".
-    The engine consumes BehavioralData unchanged, so nothing downstream moves.
+    Reads per-wallet aggregates the `siren-behavior` subgraph maintains from
+    ERC-20 Transfer events and maps them into the SAME `BehavioralData` shape the
+    stub returns. The engine consumes BehavioralData unchanged.
+
+    Config comes from the environment (never hardcoded):
+      SIREN_SUBGRAPH_URL      -- the Studio query URL (required)
+      SIREN_SUBGRAPH_API_KEY  -- bearer key, only if using a gateway URL (optional)
+
+    Mapping:
+      Account.firstSeenTimestamp -> wallet_age_days (as of the indexed head)
+      Account.txCount            -> tx_count
+      Account.operator           -> operator_address (funding source)
+      _meta.block.number/time    -> as_of_block / as_of_time
+
+    Unknown wallet (Account not found) returns the same thin/empty shape the
+    engine already expects (age 0, tx 0, operator None) -- it does NOT throw and
+    does NOT invent data. Genuine transport/GraphQL errors DO raise, so a broken
+    endpoint is never silently mistaken for a thin wallet.
     """
 
-    def __init__(self, endpoint: str, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str | None = None,
+        rpc_url: str = "https://sepolia.base.org",
+        basescan_api_key: str | None = None,
+        timeout: int = 20,
+    ) -> None:
+        if not endpoint:
+            raise ValueError("SubgraphGraphClient requires a non-empty endpoint URL")
         self.endpoint = endpoint
         self.api_key = api_key
+        self.rpc_url = rpc_url
+        self.basescan_api_key = basescan_api_key
+        self.timeout = timeout
+        self._first_seen_cache: dict[str, int | None] = {}  # addr(lower) -> first-seen ts
 
-    def behavioral(self, provider_address: str) -> BehavioralData:  # pragma: no cover
-        raise NotImplementedError(
-            "SubgraphGraphClient is not wired yet. Provide a live hosted-subgraph "
-            "endpoint + API key and implement the GraphQL read. See class docstring."
+    @classmethod
+    def from_env(cls) -> "SubgraphGraphClient":
+        endpoint = _os.environ.get("SIREN_SUBGRAPH_URL", "").strip()
+        if not endpoint:
+            raise RuntimeError(
+                "SIREN_SUBGRAPH_URL is not set. Export the Subgraph Studio query "
+                "URL to use the live client, or use StubGraphClient for offline runs."
+            )
+        api_key = _os.environ.get("SIREN_SUBGRAPH_API_KEY", "").strip() or None
+        rpc_url = _os.environ.get("SIREN_BASE_RPC_URL", "").strip() or "https://sepolia.base.org"
+        basescan = (
+            _os.environ.get("SIREN_BASESCAN_API_KEY", "").strip()
+            or _os.environ.get("ETHERSCAN_API_KEY", "").strip()
+            or None
         )
+        return cls(endpoint=endpoint, api_key=api_key, rpc_url=rpc_url, basescan_api_key=basescan)
+
+    def _post(self, variables: dict) -> dict:
+        body = _json.dumps({"query": _BEHAVIORAL_QUERY, "variables": variables}).encode()
+        headers = {"content-type": "application/json", "user-agent": "siren-graph-client"}
+        if self.api_key:
+            headers["authorization"] = f"Bearer {self.api_key}"
+        req = _urlreq.Request(self.endpoint, data=body, headers=headers)
+        try:
+            with _urlreq.urlopen(req, timeout=self.timeout) as resp:
+                payload = _json.loads(resp.read().decode())
+        except Exception as exc:  # transport-level failure -> surface, don't fake
+            raise RuntimeError(f"Subgraph request failed: {exc}") from exc
+        if payload.get("errors"):
+            raise RuntimeError(f"Subgraph GraphQL errors: {payload['errors']}")
+        data = payload.get("data")
+        if data is None:
+            raise RuntimeError("Subgraph returned no data")
+        return data
+
+    # --- real on-chain first-seen (native + token), not just this token ----- #
+
+    def _rpc(self, method: str, params: list):
+        body = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+        req = _urlreq.Request(
+            self.rpc_url,
+            data=body,
+            headers={"content-type": "application/json", "user-agent": "siren-graph-client"},
+        )
+        with _urlreq.urlopen(req, timeout=self.timeout) as resp:
+            payload = _json.loads(resp.read().decode())
+        if payload.get("error"):
+            raise RuntimeError(f"RPC error: {payload['error']}")
+        return payload["result"]
+
+    def _block_ts(self, block: int) -> int:
+        blk = self._rpc("eth_getBlockByNumber", [hex(block), False])
+        return int(blk["timestamp"], 16)
+
+    def _first_seen_ts_via_rpc(self, addr: str) -> int | None:
+        """Timestamp of the wallet's first OUTBOUND tx (native or contract call),
+        found by binary-searching the nonce. No API key needed. Returns None if
+        the wallet has never sent a transaction."""
+        latest = int(self._rpc("eth_blockNumber", []), 16)
+        total = int(self._rpc("eth_getTransactionCount", [addr, hex(latest)]), 16)
+        if total == 0:
+            return None
+        lo, hi = 0, latest  # smallest block where nonce >= 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            n = int(self._rpc("eth_getTransactionCount", [addr, hex(mid)]), 16)
+            if n >= 1:
+                hi = mid
+            else:
+                lo = mid + 1
+        return self._block_ts(lo)
+
+    def _first_seen_ts_via_explorer(self, addr: str) -> int | None:
+        """Earliest normal tx (in or out) timestamp via Etherscan v2 (Base Sepolia,
+        chainid 84532). Used only when SIREN_BASESCAN_API_KEY/ETHERSCAN_API_KEY is
+        set; more complete than RPC because it also sees inbound-only history."""
+        url = (
+            "https://api.etherscan.io/v2/api?chainid=84532&module=account&action=txlist"
+            f"&address={addr}&startblock=0&endblock=99999999&page=1&offset=1&sort=asc"
+            f"&apikey={self.basescan_api_key}"
+        )
+        req = _urlreq.Request(url, headers={"user-agent": "siren-graph-client"})
+        with _urlreq.urlopen(req, timeout=self.timeout) as resp:
+            payload = _json.loads(resp.read().decode())
+        if payload.get("status") == "1" and payload.get("result"):
+            return int(payload["result"][0]["timeStamp"])
+        return None
+
+    def _first_seen_ts(self, addr: str) -> int | None:
+        addr = addr.lower()
+        if addr in self._first_seen_cache:
+            return self._first_seen_cache[addr]
+        ts: int | None
+        try:
+            if self.basescan_api_key:
+                ts = self._first_seen_ts_via_explorer(addr)
+            else:
+                ts = self._first_seen_ts_via_rpc(addr)
+        except Exception:
+            ts = None  # first-seen is best-effort; fall back to token first-seen
+        self._first_seen_cache[addr] = ts
+        return ts
+
+    def behavioral(self, provider_address: str) -> BehavioralData:
+        data = self._post({"id": provider_address.lower()})
+
+        meta_block = data["_meta"]["block"]
+        as_of_block = int(meta_block["number"])
+        as_of_ts = int(meta_block["timestamp"])
+        as_of_time = (
+            _dt.datetime.fromtimestamp(as_of_ts, tz=_dt.timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+
+        acct = data.get("account")
+        if acct is None:
+            # Genuinely unknown wallet: no evidence, not an error.
+            return BehavioralData(
+                provider_address=provider_address,
+                wallet_age_days=0,
+                tx_count=0,
+                operator_address=None,
+                as_of_block=as_of_block,
+                as_of_time=as_of_time,
+                source="hosted_subgraph",
+            )
+
+        # Wallet age reflects REAL on-chain lifetime (native + token), taken from
+        # the earliest of: chain first-seen (RPC/explorer) and this token's
+        # first-seen. The subgraph alone only sees this token, so we widen it.
+        token_first_ts = int(acct["firstSeenTimestamp"])
+        chain_first_ts = self._first_seen_ts(provider_address)
+        first_seen_ts = min(token_first_ts, chain_first_ts) if chain_first_ts else token_first_ts
+        wallet_age_days = max(0, (as_of_ts - first_seen_ts) // 86400)
+
+        return BehavioralData(
+            provider_address=provider_address,
+            wallet_age_days=int(wallet_age_days),
+            tx_count=int(acct["txCount"]),
+            operator_address=acct.get("operator"),
+            as_of_block=as_of_block,
+            as_of_time=as_of_time,
+            source="hosted_subgraph",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Factory -- pick the live client when configured, else fall back to the stub.
+# --------------------------------------------------------------------------- #
+
+def graph_client_from_env() -> GraphClient:
+    """Return the live SubgraphGraphClient if SIREN_SUBGRAPH_URL is set, else the
+    Stub. Lets callers switch data source purely via env (SPEC swap-in point)."""
+    if _os.environ.get("SIREN_SUBGRAPH_URL", "").strip():
+        return SubgraphGraphClient.from_env()
+    return StubGraphClient()

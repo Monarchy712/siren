@@ -1,0 +1,35 @@
+# Siren behavioral subgraph — per-wallet aggregates derived from ERC-20
+# Transfer events. Shapes map 1:1 onto the engine's BehavioralData:
+#   firstSeenBlock/Timestamp -> wallet_age_days
+#   txCount                  -> tx_count (activity level)
+#   operator                 -> operator_address (funding source)
+# Freshness (as_of_block / as_of_time) comes from the built-in `_meta`.
+
+type Account @entity(immutable: false) {
+  "The wallet address (lowercased bytes)."
+  id: Bytes!
+  "Block of this wallet's first observed transfer (in or out)."
+  firstSeenBlock: BigInt!
+  "Timestamp of first observed transfer; client derives wallet_age_days."
+  firstSeenTimestamp: BigInt!
+  "Block of most recent observed transfer."
+  lastSeenBlock: BigInt!
+  "Timestamp of most recent observed transfer."
+  lastSeenTimestamp: BigInt!
+  "Total transfers where this wallet is sender or receiver = activity level."
+  txCount: BigInt!
+  "Transfers sent by this wallet."
+  sentCount: BigInt!
+  "Transfers received by this wallet."
+  receivedCount: BigInt!
+  "Distinct counterparties this wallet has transacted with (excludes zero addr)."
+  uniqueCounterparties: BigInt!
+  "Funding source: the sender of this wallet's FIRST inbound transfer."
+  operator: Bytes
+}
+
+# One row per (account, counterparty) pair, used only to count distinct
+# counterparties exactly once. Never queried directly by the client.
+type Counterparty @entity(immutable: true) {
+  id: Bytes!
+}

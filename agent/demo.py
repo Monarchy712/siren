@@ -22,7 +22,7 @@ if _SIREN_ROOT not in sys.path:
     sys.path.insert(0, _SIREN_ROOT)
 
 from agent.agent import SirenClient, agent_a_pick, agent_b_pick
-from data.graph_client import StubGraphClient
+from data.graph_client import graph_client_from_env
 from engine.model import RiskModel
 from engine.sufficiency import AGE_MIN, HIGH_T, TX_MIN
 from service.hcs import StubHCSLogger
@@ -30,10 +30,22 @@ from service.x402_gate import StubX402Gate
 
 DEMO_IDS = ["svc_01", "svc_02", "svc_03"]  # SPEC section 10 three listings
 
+# Real provider addresses are never committed to the fixture. In LIVE mode
+# (SIREN_SUBGRAPH_URL set) they are supplied at runtime via env (EST/SUS/NEW);
+# in stub mode the committed placeholder addresses are used (the stub is keyed
+# by those placeholders).
+_PROVIDER_ENV = {"svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW"}
+
 
 def _load_corpus() -> list[dict]:
     with open(os.path.join(_SIREN_ROOT, "fixture", "directory.json")) as fh:
-        return json.load(fh)["listings"]
+        listings = json.load(fh)["listings"]
+    if os.environ.get("SIREN_SUBGRAPH_URL"):  # live: use real provider addrs from env
+        for lst in listings:
+            env_name = _PROVIDER_ENV.get(lst["listing_id"])
+            if env_name and os.environ.get(env_name):
+                lst["provider_address"] = os.environ[env_name]
+    return listings
 
 
 def _hr(char: str = "-") -> None:
@@ -69,8 +81,9 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 1
 
-    # Wire the stubs (drop-in replaceable with real Graph / x402 / HCS impls).
-    graph = StubGraphClient()
+    # Graph source is env-switchable: live subgraph when SIREN_SUBGRAPH_URL is
+    # set, else the stub (x402 / HCS remain stubs here).
+    graph = graph_client_from_env()
     gate = StubX402Gate()
     hcs = StubHCSLogger()
     siren = SirenClient(corpus=corpus, graph=graph, model=model, gate=gate, hcs=hcs)
@@ -78,6 +91,7 @@ def main() -> int:
     _hr("=")
     print("SIREN DEMO -- three listings (SPEC section 10), stub Graph/x402/HCS")
     print(f"gate constants: AGE_MIN={AGE_MIN}d  TX_MIN={TX_MIN}  HIGH_T={HIGH_T}")
+    print(f"graph source  : {type(graph).__name__}")
     _hr("=")
 
     # --- 1) Score the three demo listings and print full verdicts -----------

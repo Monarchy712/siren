@@ -1,0 +1,8 @@
+{
+  "base-sepolia": {
+    "SirenTestToken": {
+      "address": "0x512d54A6b84eF537e6D3c008Df9eeB4Ca0Ee2d1A",
+      "startBlock": 46431974
+    }
+  }
+}
