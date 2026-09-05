@@ -4,3 +4,4 @@ joblib>=1.3
 fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
+hiero-sdk-python>=0.2.10   # Hedera SDK: HCS submit (service/hcs.py) + x402 client

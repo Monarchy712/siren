@@ -25,26 +25,37 @@ if _SIREN_ROOT not in sys.path:
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from data.graph_client import StubGraphClient
+from data.graph_client import graph_client_from_env
 from engine.model import RiskModel
 from engine.scorer import score_listing
-from service.hcs import StubHCSLogger
-from service.x402_gate import PaymentRequired, StubX402Gate
+from service.hcs import hcs_logger_from_env
+from service.x402_gate import PaymentRequired, x402_gate_from_env
 
 _FIXTURE = os.path.join(_SIREN_ROOT, "fixture", "directory.json")
+
+# Real provider addresses are supplied at runtime via env (EST/SUS/NEW) in live
+# mode; the committed fixture holds only placeholders.
+_PROVIDER_ENV = {"svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW"}
 
 
 def _load_corpus() -> list[dict]:
     with open(_FIXTURE) as fh:
-        return json.load(fh)["listings"]
+        listings = json.load(fh)["listings"]
+    if os.environ.get("SIREN_SUBGRAPH_URL"):  # live: inject real provider addrs
+        for lst in listings:
+            env_name = _PROVIDER_ENV.get(lst["listing_id"])
+            if env_name and os.environ.get(env_name):
+                lst["provider_address"] = os.environ[env_name]
+    return listings
 
 
 app = FastAPI(title="Siren", version="0.2.0-mvp")
 
-# Wire the stubs once. Real impls are drop-in (see module TODOs).
-_graph = StubGraphClient()
-_gate = StubX402Gate()
-_hcs = StubHCSLogger()
+# Wire data source / gate / audit log from env: live impls when their env is
+# set, else the stubs (each is independently switchable).
+_graph = graph_client_from_env()
+_gate = x402_gate_from_env()
+_hcs = hcs_logger_from_env()
 _corpus = _load_corpus()
 _model: RiskModel | None = None
 
@@ -69,10 +80,18 @@ def healthz() -> dict:
 def score(req: ScoreRequest, x_payment: str | None = Header(default=None)) -> dict:
     """Assess one listing. Gated by x402; each verdict is logged to HCS."""
     # 1) x402 gate -- pay before you get a verdict ("a guard that spends").
+    #    On 402 we return the x402 payment requirements so the client can pay.
     try:
         receipt = _gate.settle(x_payment)
     except PaymentRequired as exc:
-        raise HTTPException(status_code=402, detail=str(exc))
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "x402Version": 2,
+                "error": str(exc),
+                "accepts": [exc.requirements] if exc.requirements else [],
+            },
+        )
 
     # 2) find the target listing in the directory.
     listing = next((x for x in _corpus if x["listing_id"] == req.listing_id), None)

@@ -12,8 +12,12 @@ Swap-in point: implement `HederaHCSLogger` against a real HCS topic.
 """
 from __future__ import annotations
 
+import base64
+import datetime as _dt
 import hashlib
 import json
+import os
+import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -34,9 +38,9 @@ class Attestation:
         }
 
 
-def _summary_hash(verdict: dict) -> str:
-    """Stable hash of the fields that constitute the recorded claim."""
-    summary = {
+def _summary(verdict: dict) -> dict:
+    """The exact fields that constitute the recorded claim (SPEC section 6/8)."""
+    return {
         "listing_id": verdict.get("listing_id"),
         "provider_address": verdict.get("provider_address"),
         "risk_score": verdict.get("risk_score"),
@@ -44,8 +48,15 @@ def _summary_hash(verdict: dict) -> str:
         "verdict": verdict.get("verdict"),
         "as_of_time": verdict.get("signal_freshness", {}).get("as_of_time"),
     }
-    blob = json.dumps(summary, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _canonical(summary: dict) -> str:
+    return json.dumps(summary, sort_keys=True, separators=(",", ":"))
+
+
+def _summary_hash(verdict: dict) -> str:
+    """Stable hash of the fields that constitute the recorded claim."""
+    return hashlib.sha256(_canonical(_summary(verdict)).encode()).hexdigest()
 
 
 class HCSLogger(Protocol):
@@ -74,24 +85,124 @@ class StubHCSLogger:
 
 
 class HederaHCSLogger:
-    """Real HCS audit logger.
+    """Real HCS audit logger backed by a Hedera Consensus Service topic.
 
-    TODO(hcs): implement against a real Hedera Consensus Service topic:
-      1. Create (or reuse) an HCS topic on Hedera testnet; keep the topic id.
-      2. In log_verdict(), submit the verdict summary (or its hash) as an HCS
-         message; read back the assigned consensus sequence number.
-      3. Return an Attestation with the real topic + sequence + hash and
-         source="hedera_hcs". Verify via mirror node / HashScan.
-    The service layer consumes Attestation unchanged, so nothing downstream moves.
+    `log_verdict` submits the verdict summary to the topic via the Hedera SDK and
+    returns the consensus sequence number in an Attestation. `verify(sequence)`
+    reads that message back from the mirror node so the audit trail is provable.
+
+    HONEST framing (SPEC section 0): this proves what Siren recorded and that it
+    was not altered -- NOT that the verdict was correct.
+
+    Config from env (see `from_env`): operator id/key, topic id, network, mirror.
     """
 
-    def __init__(self, topic_id: str, operator_id: str, operator_key: str) -> None:
+    def __init__(
+        self,
+        topic_id: str,
+        operator_id: str,
+        operator_key: str,
+        network: str = "testnet",
+        mirror_url: str = "https://testnet.mirrornode.hedera.com",
+        timeout: int = 30,
+    ) -> None:
+        if not (topic_id and operator_id and operator_key):
+            raise ValueError("HederaHCSLogger requires topic_id, operator_id, operator_key")
         self.topic_id = topic_id
         self.operator_id = operator_id
         self.operator_key = operator_key
+        self.network = network
+        self.mirror_url = mirror_url.rstrip("/")
+        self.timeout = timeout
+        self._client = None
 
-    def log_verdict(self, verdict: dict) -> Attestation:  # pragma: no cover
-        raise NotImplementedError(
-            "HederaHCSLogger is not wired yet. Provide Hedera operator credentials "
-            "+ an HCS topic id and implement the message submit. See docstring."
+    @classmethod
+    def from_env(cls) -> "HederaHCSLogger":
+        topic_id = os.environ.get("HEDERA_HCS_TOPIC_ID", "").strip()
+        operator_id = os.environ.get("HEDERA_OPERATOR_ID", "").strip()
+        operator_key = os.environ.get("HEDERA_OPERATOR_KEY", "").strip()
+        missing = [k for k, v in {
+            "HEDERA_HCS_TOPIC_ID": topic_id,
+            "HEDERA_OPERATOR_ID": operator_id,
+            "HEDERA_OPERATOR_KEY": operator_key,
+        }.items() if not v]
+        if missing:
+            raise RuntimeError(f"HederaHCSLogger missing env: {', '.join(missing)}")
+        return cls(
+            topic_id=topic_id,
+            operator_id=operator_id,
+            operator_key=operator_key,
+            network=os.environ.get("HEDERA_NETWORK", "testnet"),
+            mirror_url=os.environ.get(
+                "HEDERA_MIRROR_URL", "https://testnet.mirrornode.hedera.com"
+            ),
         )
+
+    def _get_client(self):
+        if self._client is None:
+            from hiero_sdk_python import Client, Network, AccountId, PrivateKey
+            client = Client(Network(self.network))
+            client.set_operator(
+                AccountId.from_string(self.operator_id),
+                PrivateKey.from_string(self.operator_key),
+            )
+            self._client = client
+        return self._client
+
+    def log_verdict(self, verdict: dict) -> Attestation:
+        from hiero_sdk_python import TopicId, TopicMessageSubmitTransaction
+
+        summary = _summary(verdict)
+        message = _canonical({
+            **summary,
+            "message_hash": hashlib.sha256(_canonical(summary).encode()).hexdigest(),
+            "submitted_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+        client = self._get_client()
+        resp = (
+            TopicMessageSubmitTransaction()
+            .set_topic_id(TopicId.from_string(self.topic_id))
+            .set_message(message)
+            .freeze_with(client)
+            .execute(client)
+        )
+        receipt = resp.get_receipt(client)
+
+        return Attestation(
+            hcs_topic=self.topic_id,
+            sequence=int(receipt.topic_sequence_number),
+            message_hash=_summary_hash(verdict),
+            source="hedera_hcs",
+        )
+
+    def verify(self, sequence: int) -> dict:
+        """Read a message back from the mirror node to prove the audit trail.
+
+        Returns the decoded message plus consensus metadata. Raises if the
+        mirror node has not yet surfaced the message (it lags a few seconds)."""
+        url = f"{self.mirror_url}/api/v1/topics/{self.topic_id}/messages/{sequence}"
+        req = urllib.request.Request(url, headers={"user-agent": "siren-hcs-verify"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            data = json.loads(resp.read().decode())
+        decoded = base64.b64decode(data["message"]).decode()
+        return {
+            "topic_id": self.topic_id,
+            "sequence": data.get("sequence_number", sequence),
+            "consensus_timestamp": data.get("consensus_timestamp"),
+            "running_hash": data.get("running_hash"),
+            "message": json.loads(decoded),
+            "raw_message": decoded,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Factory -- live HCS when operator + topic are set in env, else the stub.
+# --------------------------------------------------------------------------- #
+
+def hcs_logger_from_env() -> HCSLogger:
+    if os.environ.get("HEDERA_OPERATOR_ID", "").strip() and os.environ.get(
+        "HEDERA_HCS_TOPIC_ID", ""
+    ).strip():
+        return HederaHCSLogger.from_env()
+    return StubHCSLogger()

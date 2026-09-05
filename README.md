@@ -125,28 +125,30 @@ evidence* is exactly what separates `svc_02` (`high_risk`) from `svc_03`
 
 ---
 
-## Swappable integrations (The Graph · x402 · Hedera HCS)
+## Integrations — live, with stub fallback
 
-Three external systems sit behind clean interfaces, each with a `Stub` for
-credential-free local runs and a real implementation that is drop-in — no engine
-code changes.
+All three external systems have real implementations behind clean interfaces,
+each independently switchable to a credential-free `Stub` via env (drop-in — no
+engine code changes). Copy `.env.example` → `.env` to configure.
 
-- **The Graph — `data/graph_client.py`.** `StubGraphClient` returns pre-seeded
-  behavioral data (`wallet_age_days`, `tx_count`, operator, freshness) in the
-  exact `BehavioralData` shape the real read will return. To go live, implement
-  `SubgraphGraphClient` against a live hosted subgraph (Subgraph Studio) on a
-  Graph-supported testnet: **provide** the Studio query endpoint + API key and a
-  subgraph that aggregates per-wallet first-seen block, tx count, and funding
-  operator; stamp `as_of_block`/`as_of_time` from `_meta`.
-- **x402 / Blocky402 — `service/x402_gate.py`.** `StubX402Gate` simulates a
-  settled payment (402 when absent). To go live, implement `Blocky402Gate`:
-  **provide** Blocky402 credentials and a Hedera-testnet pay-to address; return
-  402 payment requirements on unpaid calls and settle on retry.
-- **Hedera HCS — `service/hcs.py`.** `StubHCSLogger` assigns in-memory sequence
-  numbers and returns an attestation in the real shape. To go live, implement
-  `HederaHCSLogger`: **provide** Hedera operator id/key and an HCS topic id;
-  submit the verdict summary/hash and read back the consensus sequence, verifiable
-  via mirror node / HashScan.
+- **The Graph — `data/graph_client.py`.** `SubgraphGraphClient` reads per-wallet
+  behavioral aggregates from a hosted subgraph (Subgraph Studio, Base Sepolia)
+  into the `BehavioralData` shape; wallet age is derived from real on-chain
+  first-seen (native + token). Set `SIREN_SUBGRAPH_URL` for live; unset →
+  `StubGraphClient`.
+- **x402 / Blocky402 — `service/x402_gate.py`.** `Blocky402Gate` runs the real
+  x402 "exact" flow on Hedera testnet: HTTP 402 + payment requirements when
+  unpaid, facilitator `/verify` + `/settle` on the paid retry (per-call only).
+  Set `SIREN_PAYTO_ACCOUNT` (+ optional `BLOCKY402_*`) for live; unset →
+  `StubX402Gate`.
+- **Hedera HCS — `service/hcs.py`.** `HederaHCSLogger` submits each verdict
+  summary to an HCS topic and returns the consensus sequence, with a
+  `verify(sequence)` that reads it back from the mirror node. Set
+  `HEDERA_OPERATOR_ID` / `HEDERA_OPERATOR_KEY` / `HEDERA_HCS_TOPIC_ID` for live;
+  unset → `StubHCSLogger`.
+
+Helpers: `scripts/create_hcs_topic.py` (one-time topic creation) and
+`scripts/pay_and_score.py` (end-to-end 402 → pay → verdict → HCS read-back).
 
 ---
 
