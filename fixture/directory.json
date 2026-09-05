@@ -1,0 +1,65 @@
+{
+  "_comment": "x402 directory fixture for Siren. Each listing is attacker-controllable TEXT (name/description/price) plus a provider wallet + posting operator. Behavioral on-chain facts (wallet age, tx count) are NOT stored here -- they are read live from the GraphClient by provider_address (stubbed for now). The 3 demo listings from SPEC section 10 are svc_01/02/03; svc_04..07 make the price-median and near-duplicate corpus non-trivial.",
+  "listings": [
+    {
+      "listing_id": "svc_01",
+      "name": "Ledger Price Oracle",
+      "description": "Spot and TWAP price feeds for major assets. Straightforward per-call pricing. Returns JSON with source timestamps.",
+      "price_usd": 0.010,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000AA01",
+      "operator_address": "0xOP0000000000000000000000000000000000AA01",
+      "_demo_note": "DEMO Listing 1 -- honest & established. Plain copy, no strong claim. Established wallet. Expect low_risk / adequate."
+    },
+    {
+      "listing_id": "svc_02",
+      "name": "AlphaChain Premium Data",
+      "description": "The established, industry-leading market data API trusted by thousands of teams since 2019, with a proven track record of millions of served requests. Enterprise-grade reliability.",
+      "price_usd": 0.003,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000BB02",
+      "operator_address": "0xOP0000000000000000000000000000000000BB02",
+      "_demo_note": "DEMO Listing 2 -- subtly manipulated. Polished copy that CLAIMS an established, high-volume history; wallet is thin. claim-vs-chain contradiction fires. Priced far below median. Expect high_risk / adequate."
+    },
+    {
+      "listing_id": "svc_03",
+      "name": "New Weather Feed",
+      "description": "A simple weather data endpoint I just launched. Hourly forecasts by lat/lon. Still early, feedback welcome.",
+      "price_usd": 0.011,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000CC03",
+      "operator_address": "0xOP0000000000000000000000000000000000CC03",
+      "_demo_note": "DEMO Listing 3 -- new but honest. Thin wallet, no strong claim. Expect insufficient_evidence / thin. Proves new != malicious."
+    },
+    {
+      "listing_id": "svc_04",
+      "name": "GasStat Analytics",
+      "description": "Historical gas price analytics and percentile breakdowns across networks. Per-call access.",
+      "price_usd": 0.012,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000DD04",
+      "operator_address": "0xOP0000000000000000000000000000000000DD04"
+    },
+    {
+      "listing_id": "svc_05",
+      "name": "QuickQuote FX",
+      "description": "Real-time foreign exchange quotes with low latency. Simple REST interface, JSON responses, per-call billing.",
+      "price_usd": 0.009,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000EE05",
+      "operator_address": "0xOP00000000000000000000000000000000009999"
+    },
+    {
+      "listing_id": "svc_06",
+      "name": "QuickQuote FX Pro",
+      "description": "Real-time foreign exchange quotes with low latency. Simple REST interface, JSON responses, per-call billing.",
+      "price_usd": 0.0095,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000FF06",
+      "operator_address": "0xOP00000000000000000000000000000000009999",
+      "_note": "Near-identical text to svc_05 AND same operator_address -> exercises the near-duplicate + common-operator feature (Sybil-style posting cluster)."
+    },
+    {
+      "listing_id": "svc_07",
+      "name": "BlockMeta Index",
+      "description": "Block and transaction metadata lookups by hash or height. Per-call access with predictable pricing.",
+      "price_usd": 0.013,
+      "provider_address": "0xA1b2C3d4E5f60000000000000000000000009907",
+      "operator_address": "0xOP0000000000000000000000000000000000A907"
+    }
+  ]
+}

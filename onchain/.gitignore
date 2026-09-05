@@ -1,0 +1,11 @@
+cache/
+out/
+broadcast/
+# disposable counterparty keystores (receive-only; keys never used)
+counterparties/
+# seeding output
+seed_log.tsv
+deployment.txt
+# never commit any password material
+*.kspw
+.kspw

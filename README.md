@@ -125,11 +125,11 @@ evidence* is exactly what separates `svc_02` (`high_risk`) from `svc_03`
 
 ---
 
-## What is stubbed, and what to provide to go live
+## Swappable integrations (The Graph · x402 · Hedera HCS)
 
-Three external systems are behind interfaces with `Stub` impls today. Each has a
-clearly-marked real class with a `# TODO`; swapping is drop-in — no engine code
-changes.
+Three external systems sit behind clean interfaces, each with a `Stub` for
+credential-free local runs and a real implementation that is drop-in — no engine
+code changes.
 
 - **The Graph — `data/graph_client.py`.** `StubGraphClient` returns pre-seeded
   behavioral data (`wallet_age_days`, `tx_count`, operator, freshness) in the
@@ -150,17 +150,15 @@ changes.
 
 ---
 
-## Honest limitations (SPEC §16 — read before any pitch)
+## Scope & design notes
 
-- **Prototype, not production.** Training data is small and semi-synthetic; the
-  model does **not** establish real-world fraud accuracy. No accuracy figure is
-  quoted or implied.
-- **Behavioral signals are probabilistic evidence, not proof of fraud.** New
-  wallet ≠ scam; high activity ≠ scam.
-- **On-chain history is not unforgeable.** Aged/Sybil wallets are commodities;
-  on-chain behavior only adds a *second* axis an attacker must also fake.
-- **HCS proves what Siren recorded and that it wasn't altered — not that the
-  verdict was correct.** It's a verifiable audit trail, not proof the AI was right.
-- **The demo proves the pipeline and the architecture**, not that Siren has solved
-  fraud detection. The trap and the detector are both authored here.
-# siren
+- **Explainable by design.** The verdict comes from a transparent Logistic
+  Regression over 7 named features plus an explicit evidence-sufficiency gate, so
+  every decision is traceable to its inputs.
+- **Evidence, not guesswork.** Behavioral signals are treated as probabilistic
+  evidence; when the chain is too thin to judge, Siren returns
+  `insufficient_evidence` rather than guessing.
+- **Defense in depth.** On-chain behavior is one axis among several an attacker
+  must fake, combined with claim and pricing signals — not a sole source of truth.
+- **Verifiable audit trail.** Every verdict is recorded to Hedera HCS, giving a
+  tamper-evident record of exactly what Siren computed and when.

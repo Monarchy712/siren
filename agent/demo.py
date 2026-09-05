@@ -1,0 +1,149 @@
+"""Two-agent A/B demo (SPEC section 10) -- runs the full flow on stubs.
+
+    python agent/demo.py     (after `python train.py`)
+
+Corpus = the full directory fixture (all 7 listings) -> supplies the non-trivial
+price-median and near-duplicate corpus. The A/B decision is made over the three
+demo listings from SPEC section 10, exactly as the demo is defined:
+
+  * Agent A (no Siren)       -> picks the most attractive listing -> pays svc_02.
+  * Agent B (Siren-protected)-> pays Siren via x402, avoids svc_02, picks svc_01.
+
+Prints each demo listing's verdict, sufficiency, and reasons; then the A/B outcome.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+_SIREN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SIREN_ROOT not in sys.path:
+    sys.path.insert(0, _SIREN_ROOT)
+
+from agent.agent import SirenClient, agent_a_pick, agent_b_pick
+from data.graph_client import StubGraphClient
+from engine.model import RiskModel
+from engine.sufficiency import AGE_MIN, HIGH_T, TX_MIN
+from service.hcs import StubHCSLogger
+from service.x402_gate import StubX402Gate
+
+DEMO_IDS = ["svc_01", "svc_02", "svc_03"]  # SPEC section 10 three listings
+
+
+def _load_corpus() -> list[dict]:
+    with open(os.path.join(_SIREN_ROOT, "fixture", "directory.json")) as fh:
+        return json.load(fh)["listings"]
+
+
+def _hr(char: str = "-") -> None:
+    print(char * 72)
+
+
+def _print_verdict(v: dict) -> None:
+    print(f"  listing_id           : {v['listing_id']}")
+    print(f"  risk_score           : {v['risk_score']}")
+    print(f"  evidence_sufficiency : {v['evidence_sufficiency']}")
+    print(f"  verdict              : {v['verdict']}")
+    if v["flags"]:
+        print("  flags:")
+        for fl in v["flags"]:
+            print(f"    - [{fl['type']}] {fl['detail']}")
+    print("  reasons:")
+    for r in v["reasons"]:
+        print(f"    - {r}")
+    fr = v["signal_freshness"]
+    print(f"  signal_freshness     : block {fr['as_of_block']} @ {fr['as_of_time']} ({fr['source']})")
+    att = v.get("attestation", {})
+    if att:
+        print(f"  attestation          : HCS topic {att['hcs_topic']}, seq {att['sequence']}")
+
+
+def main() -> int:
+    corpus = _load_corpus()
+    by_id = {x["listing_id"]: x for x in corpus}
+
+    try:
+        model = RiskModel.load()
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+
+    # Wire the stubs (drop-in replaceable with real Graph / x402 / HCS impls).
+    graph = StubGraphClient()
+    gate = StubX402Gate()
+    hcs = StubHCSLogger()
+    siren = SirenClient(corpus=corpus, graph=graph, model=model, gate=gate, hcs=hcs)
+
+    _hr("=")
+    print("SIREN DEMO -- three listings (SPEC section 10), stub Graph/x402/HCS")
+    print(f"gate constants: AGE_MIN={AGE_MIN}d  TX_MIN={TX_MIN}  HIGH_T={HIGH_T}")
+    _hr("=")
+
+    # --- 1) Score the three demo listings and print full verdicts -----------
+    demo_verdicts: dict[str, dict] = {}
+    for lid in DEMO_IDS:
+        v = siren.assess(by_id[lid])
+        demo_verdicts[lid] = v
+        note = by_id[lid].get("_demo_note", "")
+        print(f"\n[{lid}] {by_id[lid]['name']}")
+        if note:
+            print(f"  ({note})")
+        _print_verdict(v)
+
+    # --- 2) The two-agent A/B flow over the three demo listings -------------
+    demo_corpus = [by_id[i] for i in DEMO_IDS]
+    _hr("=")
+    print("TWO-AGENT A/B FLOW")
+    _hr("=")
+
+    a_pick = agent_a_pick(demo_corpus)
+    print(f"\nAgent A (no Siren)        -> pays {a_pick['listing_id']} ({a_pick['name']}) "
+          f"at ${a_pick['price_usd']} -- the attractive, manipulated listing.")
+
+    b_pick, _ = agent_b_pick(demo_corpus, siren)
+    if b_pick is None:
+        print("Agent B (Siren-protected) -> found no low_risk option; abstains.")
+    else:
+        print(f"Agent B (Siren-protected) -> avoids {a_pick['listing_id']} "
+              f"(verdict {demo_verdicts[a_pick['listing_id']]['verdict']}) and pays "
+              f"{b_pick['listing_id']} ({b_pick['name']}) -- the honest one.")
+
+    # --- 3) HCS audit trail written during the flow -------------------------
+    _hr("=")
+    print("HCS AUDIT TRAIL (stub) -- what Siren recorded, in order")
+    _hr("=")
+    for rec in hcs.records:
+        print(f"  seq {rec['sequence']:>2}  topic {rec['hcs_topic']}  "
+              f"{rec['listing_id']}  hash {rec['message_hash'][:16]}...")
+
+    # --- 4) Definition-of-done check ----------------------------------------
+    expected = {
+        "svc_01": ("low_risk", "adequate"),
+        "svc_02": ("high_risk", "adequate"),
+        "svc_03": ("insufficient_evidence", "thin"),
+    }
+    _hr("=")
+    print("DEFINITION-OF-DONE CHECK")
+    _hr("=")
+    ok = True
+    for lid, (exp_v, exp_s) in expected.items():
+        v = demo_verdicts[lid]
+        got = (v["verdict"], v["evidence_sufficiency"])
+        passed = got == (exp_v, exp_s)
+        ok = ok and passed
+        print(f"  {lid}: expected {exp_v}/{exp_s:<21} got {got[0]}/{got[1]:<21} "
+              f"{'PASS' if passed else 'FAIL'}")
+    a_ok = a_pick["listing_id"] == "svc_02"
+    b_ok = (b_pick is not None) and b_pick["listing_id"] == "svc_01"
+    print(f"  Agent A pays manipulated svc_02          {'PASS' if a_ok else 'FAIL'}")
+    print(f"  Agent B avoids svc_02, picks honest svc_01 {'PASS' if b_ok else 'FAIL'}")
+    ok = ok and a_ok and b_ok
+    _hr("=")
+    print("RESULT:", "ALL CHECKS PASS" if ok else "SOME CHECKS FAILED")
+    _hr("=")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
