@@ -14,13 +14,33 @@ import os
 import sys
 import urllib.request
 
+
+def _load_dotenv() -> None:
+    """Load onchain/.env (gitignored) into os.environ if present -- keeps real
+    addresses out of committed source."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_dotenv()
+
 RPC = os.environ.get("RPC", "https://sepolia.base.org")
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
+# Provider addresses come from env (see onchain/.env / .env.example) -- no real
+# addresses are hardcoded in the committed source.
 PROVIDERS = {
-    "ESTABLISHED": "0x687dFEcC7eAaFA4DC28f72Bfb9cdB77cAe18a641",
-    "SUSPICIOUS":  "0x7A0A94615094Ef0673f2D0F031D43fB9ED78cc0B",
-    "NEW/HONEST":  "0x6d11172f538b60BE3a69c745944767Ac94019df7",
+    "ESTABLISHED": os.environ.get("EST", ""),
+    "SUSPICIOUS":  os.environ.get("SUS", ""),
+    "NEW/HONEST":  os.environ.get("NEW", ""),
 }
 ZERO = "0x" + "0" * 40
 

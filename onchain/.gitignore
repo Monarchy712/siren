@@ -1,6 +1,8 @@
 cache/
 out/
 broadcast/
+# local real addresses (never commit)
+.env
 # disposable counterparty keystores (receive-only; keys never used)
 counterparties/
 # seeding output

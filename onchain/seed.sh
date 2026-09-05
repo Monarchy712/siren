@@ -30,21 +30,17 @@ EST_ALIAS="${EST_ALIAS:-siren_established}"
 SUS_ALIAS="${SUS_ALIAS:-siren_suspicious}"
 NEW_ALIAS="${NEW_ALIAS:-siren_new}"
 
-FUNDER=0xa34118bD1A2A789A962A4471C59c3964fb716123
-EST=0x687dFEcC7eAaFA4DC28f72Bfb9cdB77cAe18a641   # ESTABLISHED / low-risk
-SUS=0x7A0A94615094Ef0673f2D0F031D43fB9ED78cc0B   # THIN / suspicious
-NEW=0x6d11172f538b60BE3a69c745944767Ac94019df7   # NEW / honest
+# Addresses are loaded from a local, gitignored onchain/.env (never committed).
+# Copy onchain/.env.example -> onchain/.env and fill in real values.
+_here="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$_here/.env" ]; then set -a; . "$_here/.env"; set +a; fi
 
-# ----- disposable counterparties (receive-only; generated locally) --------- #
-E1=0xA24f75FA04EeA1F2C8E11c39C6Af3C3659980D8F
-E2=0x16EF02c5567371f2e37aAf6ecd8433d19191A678
-E3=0x43c61cD8AAf7eebD79bd26330dFBDB4E7e83512e
-E4=0xe95B9E463C66208DFbb503800E8B6a82de8F9968
-E5=0x9FB843d5cc14a1419F490af0FFa74a0A5D1C3171
-E6=0x4b372B00cbEA2f3121D5dd0F44390469e5b1a722
-S1=0x95aF7760d98B370eFB8D600468Ac06bc16D47690
-S2=0x8a43DCE716077B336Aa50151B477BB7d6C5e9343
-N1=0x8ec1c96F000940A0AD0dF53106a90Ac0C8496BD1
+: "${FUNDER:?set FUNDER in onchain/.env}"        # funder / deployer
+: "${EST:?set EST in onchain/.env}"              # ESTABLISHED / low-risk provider
+: "${SUS:?set SUS in onchain/.env}"              # THIN / suspicious provider
+: "${NEW:?set NEW in onchain/.env}"              # NEW / honest provider
+# disposable counterparties (receive-only)
+: "${E1:?}" "${E2:?}" "${E3:?}" "${E4:?}" "${E5:?}" "${E6:?}" "${S1:?}" "${S2:?}" "${N1:?}"
 
 # --------------------------------------------------------------------------- #
 if [ -z "${TOKEN:-}" ]; then echo "ERROR: export TOKEN=0x... first"; exit 1; fi
