@@ -33,10 +33,12 @@ from service.x402_gate import StubX402Gate
 DEMO_IDS = ["svc_01", "svc_02", "svc_03", "svc_08"]
 
 # Real provider addresses are never committed to the fixture. In LIVE mode
-# (SIREN_SUBGRAPH_URL set) they are supplied at runtime via env (EST/SUS/NEW);
-# in stub mode the committed placeholder addresses are used (the stub is keyed
-# by those placeholders).
-_PROVIDER_ENV = {"svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW"}
+# (SIREN_SUBGRAPH_URL set) they are supplied at runtime via env; in stub mode the
+# committed placeholder addresses are used (the stub is keyed by those).
+_PROVIDER_ENV = {
+    "svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW",
+    "svc_08": "SVC08", "svc_09": "SVC08_SIBLING",
+}
 
 
 def _load_corpus() -> list[dict]:

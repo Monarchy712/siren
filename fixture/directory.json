@@ -69,7 +69,17 @@
       "price_usd": 0.011,
       "provider_address": "0xA1b2C3d4E5f6000000000000000000000000DD08",
       "operator_address": "0xOP0000000000000000000000000000000000DD08",
-      "_demo_note": "DEMO Listing 4 -- brand-new 'first-day scam'. Thin wallet, no strong claim; on its own reads insufficient_evidence. Funded by the same wallet as svc_02 (known_bad), so funding_cluster_risk fires -> high_risk / adequate via funding inheritance."
+      "_demo_note": "DEMO Listing 4 -- brand-new 'first-day scam'. Thin wallet, no strong claim; on its own reads insufficient_evidence. Funded by the same wallet as a known_bad sibling (svc_02 on stub; svc_09 on live), so funding_cluster_risk fires -> high_risk / adequate via funding inheritance. Real address via SVC08 env in live mode."
+    },
+    {
+      "listing_id": "svc_09",
+      "name": "VeriData Markets",
+      "description": "The trusted, established market data provider serving thousands of clients since 2020, with a proven enterprise track record.",
+      "price_usd": 0.011,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000DD09",
+      "operator_address": "0xOP0000000000000000000000000000000000DD09",
+      "known_bad": true,
+      "_demo_note": "Flagged sibling anchoring the LIVE Pillar 2 cluster: a manipulated 'established since 2020' claim on a thin wallet (contradiction -> high_risk on its own). Funded by the same bad funder as svc_08, so svc_08 inherits its risk. Real address via SVC08_SIBLING env in live mode."
     }
   ]
 }

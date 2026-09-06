@@ -39,9 +39,13 @@ from service.x402_gate import PaymentRequired, x402_gate_from_env
 
 _FIXTURE = os.path.join(_SIREN_ROOT, "fixture", "directory.json")
 
-# Real provider addresses are supplied at runtime via env (EST/SUS/NEW) in live
-# mode; the committed fixture holds only placeholders.
-_PROVIDER_ENV = {"svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW"}
+# Real provider addresses are supplied at runtime via env in live mode; the
+# committed fixture holds only placeholders. svc_08/svc_09 are the live Pillar 2
+# cluster (new scam + flagged sibling), funded by a dedicated bad funder.
+_PROVIDER_ENV = {
+    "svc_01": "EST", "svc_02": "SUS", "svc_03": "NEW",
+    "svc_08": "SVC08", "svc_09": "SVC08_SIBLING",
+}
 
 
 def _load_corpus() -> list[dict]:
