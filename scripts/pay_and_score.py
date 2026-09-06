@@ -23,10 +23,11 @@ import sys
 import time
 import urllib.request
 
-from hiero_sdk_python import (
-    Client, Network, AccountId, PrivateKey, TransferTransaction, Hbar,
-)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from hiero_sdk_python import Client, Network, AccountId, TransferTransaction, Hbar
 from hiero_sdk_python.transaction.transaction_id import TransactionId
+from service.hcs import key_from_string
 
 SCORE_URL = os.environ.get("SIREN_SCORE_URL", "http://localhost:8000/score")
 MIRROR = os.environ.get("HEDERA_MIRROR_URL", "https://testnet.mirrornode.hedera.com").rstrip("/")
@@ -57,7 +58,7 @@ def build_x_payment(requirements: dict, payer_id: str, payer_key: str) -> str:
     network = requirements["network"]
 
     client = Client(Network(NETWORK))
-    client.set_operator(AccountId.from_string(payer_id), PrivateKey.from_string(payer_key))
+    client.set_operator(AccountId.from_string(payer_id), key_from_string(payer_key))
 
     tx = (
         TransferTransaction()
@@ -68,7 +69,7 @@ def build_x_payment(requirements: dict, payer_id: str, payer_key: str) -> str:
         .set_node_account_ids([AccountId.from_string(NODE)])
     )
     tx.freeze_with(client)
-    tx.sign(PrivateKey.from_string(payer_key))  # payer signs only ("partially signed")
+    tx.sign(key_from_string(payer_key))  # payer signs only ("partially signed")
 
     b64tx = base64.b64encode(tx.to_bytes()).decode()
     payment_payload = {

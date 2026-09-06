@@ -38,6 +38,28 @@ class Attestation:
         }
 
 
+def key_from_string(secret: str):
+    """Parse a Hedera private key, picking the right curve.
+
+    Hedera portal ECDSA (secp256k1) keys are 0x-prefixed / 64-char hex; the SDK's
+    generic from_string guesses Ed25519 first for ambiguous 32-byte input, which
+    silently produces the wrong signature (INVALID_SIGNATURE). We disambiguate:
+    0x-prefixed or bare 64-hex -> ECDSA; otherwise DER/Ed25519 via from_string.
+    Override with HEDERA_KEY_TYPE=ecdsa|ed25519 if needed.
+    """
+    from hiero_sdk_python import PrivateKey
+
+    s = secret.strip()
+    bare = s[2:] if s.startswith("0x") else s
+    forced = os.environ.get("HEDERA_KEY_TYPE", "").strip().lower()
+    is_hex64 = len(bare) == 64 and all(c in "0123456789abcdefABCDEF" for c in bare)
+    if forced == "ed25519":
+        return PrivateKey.from_string_ed25519(bare)
+    if forced == "ecdsa" or s.startswith("0x") or is_hex64:
+        return PrivateKey.from_string_ecdsa(s)
+    return PrivateKey.from_string(s)  # DER / Ed25519
+
+
 def _summary(verdict: dict) -> dict:
     """The exact fields that constitute the recorded claim (SPEC section 6/8)."""
     return {
@@ -140,11 +162,11 @@ class HederaHCSLogger:
 
     def _get_client(self):
         if self._client is None:
-            from hiero_sdk_python import Client, Network, AccountId, PrivateKey
+            from hiero_sdk_python import Client, Network, AccountId
             client = Client(Network(self.network))
             client.set_operator(
                 AccountId.from_string(self.operator_id),
-                PrivateKey.from_string(self.operator_key),
+                key_from_string(self.operator_key),
             )
             self._client = client
         return self._client
@@ -160,14 +182,16 @@ class HederaHCSLogger:
         })
 
         client = self._get_client()
-        resp = (
+        result = (
             TopicMessageSubmitTransaction()
             .set_topic_id(TopicId.from_string(self.topic_id))
             .set_message(message)
             .freeze_with(client)
             .execute(client)
         )
-        receipt = resp.get_receipt(client)
+        # execute() returns the receipt directly (wait_for_receipt=True default);
+        # older paths return a response exposing get_receipt().
+        receipt = result.get_receipt(client) if hasattr(result, "get_receipt") else result
 
         return Attestation(
             hcs_topic=self.topic_id,
