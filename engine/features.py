@@ -29,6 +29,7 @@ FEATURE_NAMES: list[str] = [
     "tx_norm",                  # min(tx,5000)/5000
     "contradiction_fired",      # 1 if claim asserted AND chain thin (derived)
     "dup_common_operator",      # 1 if near-duplicate AND shared operator (derived)
+    "funding_cluster_risk",     # 1 if shares a funder with a high-risk sibling (Pillar 2)
 ]
 
 # Text similarity above this counts as a "near duplicate" for the boolean flag
@@ -66,6 +67,11 @@ class Features:
     contradiction_fired: bool
     dup_common_operator: bool
 
+    # --- Pillar 2: funding-cluster (funding inheritance) --------------------
+    funding_cluster_risk: int
+    funding_funder: str | None
+    funding_bad_sibling_ids: list[str]
+
     # --- freshness (passed straight through from the graph read) -------------
     as_of_block: int
     as_of_time: str
@@ -90,6 +96,7 @@ class Features:
             self.tx_norm,
             float(self.contradiction_fired),
             float(self.dup_common_operator),
+            float(self.funding_cluster_risk),
         ]
 
 
@@ -148,6 +155,29 @@ def extract_features(
         common_operator = bool(listing_op and match_op and listing_op == match_op)
     dup_common_operator = bool(near_duplicate and common_operator)
 
+    # --- Derived: funding-cluster risk (Pillar 2) ---------------------------
+    # Fires when the provider shares a (non-utility) funder with a directory
+    # sibling that is high-risk. Works even when the provider's own chain is
+    # thin -- that is the "first-day scam" catch. Funding association is not
+    # guilt: risk is never propagated through shared-infrastructure funders.
+    bad_addresses = {
+        x["provider_address"].lower()
+        for x in corpus if x.get("known_bad") and x.get("provider_address")
+    }
+    lineage = graph.funding_lineage(listing["provider_address"], corpus, bad_addresses)
+    bad_siblings = [
+        s for s in lineage.siblings
+        if s.get("prior_risk") == "high" and s.get("listed_in_directory")
+    ]
+    funding_cluster_risk = 1 if (bad_siblings and not lineage.funder_is_utility) else 0
+    _addr_to_id = {
+        x["provider_address"].lower(): x["listing_id"]
+        for x in corpus if x.get("provider_address")
+    }
+    funding_bad_sibling_ids = [
+        _addr_to_id.get(s["address"].lower(), s["address"]) for s in bad_siblings
+    ]
+
     return Features(
         listing_id=listing["listing_id"],
         provider_address=listing["provider_address"],
@@ -165,6 +195,9 @@ def extract_features(
         common_operator=common_operator,
         contradiction_fired=contradiction_fired,
         dup_common_operator=dup_common_operator,
+        funding_cluster_risk=funding_cluster_risk,
+        funding_funder=lineage.funder,
+        funding_bad_sibling_ids=funding_bad_sibling_ids,
         as_of_block=beh.as_of_block,
         as_of_time=beh.as_of_time,
         source=beh.source,

@@ -17,7 +17,8 @@
       "price_usd": 0.003,
       "provider_address": "0xA1b2C3d4E5f6000000000000000000000000BB02",
       "operator_address": "0xOP0000000000000000000000000000000000BB02",
-      "_demo_note": "DEMO Listing 2 -- subtly manipulated. Polished copy that CLAIMS an established, high-volume history; wallet is thin. claim-vs-chain contradiction fires. Priced far below median. Expect high_risk / adequate."
+      "known_bad": true,
+      "_demo_note": "DEMO Listing 2 -- subtly manipulated. Polished copy that CLAIMS an established, high-volume history; wallet is thin. claim-vs-chain contradiction fires. Priced far below median. Expect high_risk / adequate. Marked known_bad: anchors the Pillar 2 funding cluster."
     },
     {
       "listing_id": "svc_03",
@@ -60,6 +61,15 @@
       "price_usd": 0.013,
       "provider_address": "0xA1b2C3d4E5f60000000000000000000000009907",
       "operator_address": "0xOP0000000000000000000000000000000000A907"
+    },
+    {
+      "listing_id": "svc_08",
+      "name": "FreshFeed Data",
+      "description": "A new market data endpoint. Simple per-call JSON responses, just launched. Feedback welcome.",
+      "price_usd": 0.011,
+      "provider_address": "0xA1b2C3d4E5f6000000000000000000000000DD08",
+      "operator_address": "0xOP0000000000000000000000000000000000DD08",
+      "_demo_note": "DEMO Listing 4 -- brand-new 'first-day scam'. Thin wallet, no strong claim; on its own reads insufficient_evidence. Funded by the same wallet as svc_02 (known_bad), so funding_cluster_risk fires -> high_risk / adequate via funding inheritance."
     }
   ]
 }

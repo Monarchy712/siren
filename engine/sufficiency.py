@@ -48,9 +48,19 @@ def decide(
     contradiction_fired: bool,
     near_duplicate: bool,
     common_operator: bool,
+    funding_cluster_fired: bool = False,
 ) -> SufficiencyResult:
-    """Apply the sufficiency gate + three-way verdict exactly as specified."""
-    affirmative_signal = contradiction_fired or (near_duplicate and common_operator)
+    """Apply the sufficiency gate + three-way verdict exactly as specified.
+
+    `funding_cluster_fired` (Pillar 2) is affirmative evidence, mirroring the
+    claim-vs-chain contradiction: a brand-new wallet tied to a bad funding
+    cluster is not "unknown", so it resolves to adequate rather than thin.
+    """
+    affirmative_signal = (
+        contradiction_fired
+        or (near_duplicate and common_operator)
+        or funding_cluster_fired
+    )
     rich = chain_is_rich(wallet_age_days, tx_count)
 
     if rich or affirmative_signal:

@@ -1,14 +1,16 @@
-"""HCSLogger adapter -- the tamper-evident audit trail (SPEC section 8).
+"""HCSLogger adapter -- the tamper-evident audit trail + accuracy track record.
 
-Each verdict's hash/summary is written to a Hedera Consensus Service topic,
-verifiable via mirror node / HashScan. HONEST framing (SPEC section 0): HCS proves
-what Siren recorded and that it was not altered -- NOT that the verdict was
-correct.
+Each verdict's summary is written to a Hedera Consensus Service topic, and each
+reported outcome is written as a follow-up message that references the original
+verdict's sequence. HONEST framing (SPEC section 0): HCS proves what Siren
+recorded and that it was not altered -- NOT that the verdict was correct.
 
-For MVP we ship a Stub that assigns sequence numbers in-memory and returns an
-attestation in the exact shape the real HCS write will return.
+Pillar 1 property: the track record is reconstructable from the public chain
+(mirror node) alone -- see service/ledger.py. A local store is used only by the
+stub for offline runs; the chain is the source of truth.
 
-Swap-in point: implement `HederaHCSLogger` against a real HCS topic.
+Swap-in point: `HederaHCSLogger` submits to a real topic; `StubHCSLogger` keeps
+messages in memory in the same shape the mirror node returns.
 """
 from __future__ import annotations
 
@@ -26,11 +28,10 @@ from typing import Protocol
 class Attestation:
     hcs_topic: str
     sequence: int
-    message_hash: str  # sha256 of the recorded verdict summary
+    message_hash: str  # sha256 of the recorded message
     source: str        # "hedera_hcs" (real) / "stub" (mock)
 
     def to_output(self) -> dict:
-        # SPEC section 6 attestation block (topic + sequence). Hash kept for verify.
         return {
             "hcs_topic": self.hcs_topic,
             "sequence": self.sequence,
@@ -60,6 +61,13 @@ def key_from_string(secret: str):
     return PrivateKey.from_string(s)  # DER / Ed25519
 
 
+# --------------------------------------------------------------------------- #
+# Message shapes -- identical for stub and real, so the ledger reads uniformly.
+# --------------------------------------------------------------------------- #
+
+VALID_OUTCOMES = ("delivered", "failed", "flagged")
+
+
 def _summary(verdict: dict) -> dict:
     """The exact fields that constitute the recorded claim (SPEC section 6/8)."""
     return {
@@ -72,62 +80,99 @@ def _summary(verdict: dict) -> dict:
     }
 
 
-def _canonical(summary: dict) -> str:
-    return json.dumps(summary, sort_keys=True, separators=(",", ":"))
+def _canonical(obj: dict) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 def _summary_hash(verdict: dict) -> str:
-    """Stable hash of the fields that constitute the recorded claim."""
     return hashlib.sha256(_canonical(_summary(verdict)).encode()).hexdigest()
 
 
-class HCSLogger(Protocol):
-    def log_verdict(self, verdict: dict) -> Attestation:
-        ...
+def _msg_hash(message: dict) -> str:
+    return hashlib.sha256(_canonical(message).encode()).hexdigest()
 
+
+def _now_iso() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _verdict_message(verdict: dict) -> dict:
+    summary = _summary(verdict)
+    return {"type": "verdict", **summary,
+            "message_hash": _summary_hash(verdict), "submitted_at": _now_iso()}
+
+
+def _outcome_message(ref_sequence: int, outcome: str, listing_id: str | None) -> dict:
+    if outcome not in VALID_OUTCOMES:
+        raise ValueError(f"outcome must be one of {VALID_OUTCOMES}")
+    return {"type": "outcome", "ref_sequence": int(ref_sequence),
+            "outcome": outcome, "listing_id": listing_id, "submitted_at": _now_iso()}
+
+
+def mirror_message_url(mirror_url: str, topic: str, sequence: int) -> str:
+    return f"{mirror_url.rstrip('/')}/api/v1/topics/{topic}/messages/{sequence}"
+
+
+def hashscan_topic_url(network: str, topic: str) -> str:
+    return f"https://hashscan.io/{network}/topic/{topic}"
+
+
+class HCSLogger(Protocol):
+    def log_verdict(self, verdict: dict) -> Attestation: ...
+    def log_outcome(self, ref_sequence: int, outcome: str,
+                    listing_id: str | None = None) -> Attestation: ...
+
+
+# --------------------------------------------------------------------------- #
+# Stub -- in-memory, mirrors a real topic's message list for offline runs.
+# --------------------------------------------------------------------------- #
 
 class StubHCSLogger:
-    """In-memory HCS stand-in. Deterministic topic, incrementing sequence."""
+    """In-memory HCS stand-in. Deterministic topic, incrementing sequence.
+
+    `messages` mirrors what the mirror node would return ([{sequence, message}]),
+    so service/ledger.py can compute a track record from it exactly as it would
+    from the chain.
+    """
 
     def __init__(self, topic: str = "0.0.4592") -> None:
         self.topic = topic
         self._seq = 0
-        self.records: list[dict] = []  # inspectable audit trail for the demo
+        self.records: list[dict] = []
+        self.messages: list[dict] = []  # [{sequence, message}]
 
-    def log_verdict(self, verdict: dict) -> Attestation:
+    def _append(self, message: dict) -> Attestation:
         self._seq += 1
-        att = Attestation(
-            hcs_topic=self.topic,
-            sequence=self._seq,
-            message_hash=_summary_hash(verdict),
-            source="stub",
-        )
-        self.records.append({**att.to_output(), "listing_id": verdict.get("listing_id")})
+        self.messages.append({"sequence": self._seq, "message": message})
+        att = Attestation(self.topic, self._seq,
+                          message.get("message_hash") or _msg_hash(message), "stub")
+        self.records.append({**att.to_output(), "type": message.get("type"),
+                             "listing_id": message.get("listing_id"),
+                             "ref_sequence": message.get("ref_sequence")})
         return att
 
+    def log_verdict(self, verdict: dict) -> Attestation:
+        return self._append(_verdict_message(verdict))
+
+    def log_outcome(self, ref_sequence: int, outcome: str,
+                    listing_id: str | None = None) -> Attestation:
+        return self._append(_outcome_message(ref_sequence, outcome, listing_id))
+
+    def mirror_messages(self) -> list[dict]:
+        return list(self.messages)
+
+
+# --------------------------------------------------------------------------- #
+# Real -- Hedera Consensus Service via the SDK; readable back via mirror node.
+# --------------------------------------------------------------------------- #
 
 class HederaHCSLogger:
-    """Real HCS audit logger backed by a Hedera Consensus Service topic.
+    """Real HCS logger backed by a Hedera Consensus Service topic."""
 
-    `log_verdict` submits the verdict summary to the topic via the Hedera SDK and
-    returns the consensus sequence number in an Attestation. `verify(sequence)`
-    reads that message back from the mirror node so the audit trail is provable.
-
-    HONEST framing (SPEC section 0): this proves what Siren recorded and that it
-    was not altered -- NOT that the verdict was correct.
-
-    Config from env (see `from_env`): operator id/key, topic id, network, mirror.
-    """
-
-    def __init__(
-        self,
-        topic_id: str,
-        operator_id: str,
-        operator_key: str,
-        network: str = "testnet",
-        mirror_url: str = "https://testnet.mirrornode.hedera.com",
-        timeout: int = 30,
-    ) -> None:
+    def __init__(self, topic_id: str, operator_id: str, operator_key: str,
+                 network: str = "testnet",
+                 mirror_url: str = "https://testnet.mirrornode.hedera.com",
+                 timeout: int = 30) -> None:
         if not (topic_id and operator_id and operator_key):
             raise ValueError("HederaHCSLogger requires topic_id, operator_id, operator_key")
         self.topic_id = topic_id
@@ -151,61 +196,45 @@ class HederaHCSLogger:
         if missing:
             raise RuntimeError(f"HederaHCSLogger missing env: {', '.join(missing)}")
         return cls(
-            topic_id=topic_id,
-            operator_id=operator_id,
-            operator_key=operator_key,
+            topic_id=topic_id, operator_id=operator_id, operator_key=operator_key,
             network=os.environ.get("HEDERA_NETWORK", "testnet"),
-            mirror_url=os.environ.get(
-                "HEDERA_MIRROR_URL", "https://testnet.mirrornode.hedera.com"
-            ),
+            mirror_url=os.environ.get("HEDERA_MIRROR_URL", "https://testnet.mirrornode.hedera.com"),
         )
 
     def _get_client(self):
         if self._client is None:
             from hiero_sdk_python import Client, Network, AccountId
             client = Client(Network(self.network))
-            client.set_operator(
-                AccountId.from_string(self.operator_id),
-                key_from_string(self.operator_key),
-            )
+            client.set_operator(AccountId.from_string(self.operator_id),
+                                key_from_string(self.operator_key))
             self._client = client
         return self._client
 
-    def log_verdict(self, verdict: dict) -> Attestation:
+    def _submit(self, message: dict) -> Attestation:
         from hiero_sdk_python import TopicId, TopicMessageSubmitTransaction
-
-        summary = _summary(verdict)
-        message = _canonical({
-            **summary,
-            "message_hash": hashlib.sha256(_canonical(summary).encode()).hexdigest(),
-            "submitted_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
-
         client = self._get_client()
         result = (
             TopicMessageSubmitTransaction()
             .set_topic_id(TopicId.from_string(self.topic_id))
-            .set_message(message)
+            .set_message(_canonical(message))
             .freeze_with(client)
             .execute(client)
         )
-        # execute() returns the receipt directly (wait_for_receipt=True default);
-        # older paths return a response exposing get_receipt().
+        # execute() returns the receipt directly (wait_for_receipt=True default).
         receipt = result.get_receipt(client) if hasattr(result, "get_receipt") else result
+        return Attestation(self.topic_id, int(receipt.topic_sequence_number),
+                           message.get("message_hash") or _msg_hash(message), "hedera_hcs")
 
-        return Attestation(
-            hcs_topic=self.topic_id,
-            sequence=int(receipt.topic_sequence_number),
-            message_hash=_summary_hash(verdict),
-            source="hedera_hcs",
-        )
+    def log_verdict(self, verdict: dict) -> Attestation:
+        return self._submit(_verdict_message(verdict))
+
+    def log_outcome(self, ref_sequence: int, outcome: str,
+                    listing_id: str | None = None) -> Attestation:
+        return self._submit(_outcome_message(ref_sequence, outcome, listing_id))
 
     def verify(self, sequence: int) -> dict:
-        """Read a message back from the mirror node to prove the audit trail.
-
-        Returns the decoded message plus consensus metadata. Raises if the
-        mirror node has not yet surfaced the message (it lags a few seconds)."""
-        url = f"{self.mirror_url}/api/v1/topics/{self.topic_id}/messages/{sequence}"
+        """Read a message back from the mirror node to prove the audit trail."""
+        url = mirror_message_url(self.mirror_url, self.topic_id, sequence)
         req = urllib.request.Request(url, headers={"user-agent": "siren-hcs-verify"})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode())
@@ -219,10 +248,6 @@ class HederaHCSLogger:
             "raw_message": decoded,
         }
 
-
-# --------------------------------------------------------------------------- #
-# Factory -- live HCS when operator + topic are set in env, else the stub.
-# --------------------------------------------------------------------------- #
 
 def hcs_logger_from_env() -> HCSLogger:
     if os.environ.get("HEDERA_OPERATOR_ID", "").strip() and os.environ.get(

@@ -33,7 +33,8 @@ from pydantic import BaseModel
 from data.graph_client import graph_client_from_env
 from engine.model import RiskModel
 from engine.scorer import score_listing
-from service.hcs import hcs_logger_from_env
+from service.hcs import hcs_logger_from_env, mirror_message_url
+from service.ledger import ledger_from_logger
 from service.x402_gate import PaymentRequired, x402_gate_from_env
 
 _FIXTURE = os.path.join(_SIREN_ROOT, "fixture", "directory.json")
@@ -76,6 +77,19 @@ class ScoreRequest(BaseModel):
     listing_id: str
 
 
+class OutcomeRequest(BaseModel):
+    sequence: int          # the HCS sequence of the original verdict
+    outcome: str           # delivered | failed | flagged
+    listing_id: str | None = None
+
+
+def _receipt(att) -> dict:
+    """First-class verdict receipt: {hcs_topic, sequence, verify_url} (Pillar 1)."""
+    mirror = getattr(_hcs, "mirror_url", None)
+    verify_url = mirror_message_url(mirror, att.hcs_topic, att.sequence) if mirror else None
+    return {"hcs_topic": att.hcs_topic, "sequence": att.sequence, "verify_url": verify_url}
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "listings": len(_corpus)}
@@ -106,9 +120,10 @@ def score(req: ScoreRequest, x_payment: str | None = Header(default=None)) -> di
     # 3) run the Risk Assessment Engine.
     verdict = score_listing(listing, _corpus, _graph, _get_model())
 
-    # 4) write to HCS and attach the attestation (SPEC section 6 shape).
+    # 4) write to HCS and attach the attestation (SPEC section 6 shape) + receipt.
     att = _hcs.log_verdict(verdict)
     verdict["attestation"] = att.to_output()
+    verdict["receipt"] = _receipt(att)  # {hcs_topic, sequence, verify_url}
     verdict["payment"] = {
         "paid": receipt.paid,
         "amount_usd": receipt.amount_usd,
@@ -116,3 +131,29 @@ def score(req: ScoreRequest, x_payment: str | None = Header(default=None)) -> di
         "source": receipt.source,
     }
     return verdict
+
+
+@app.post("/outcome")
+def outcome(req: OutcomeRequest) -> dict:
+    """Report what actually happened with a service, referencing the verdict's
+    HCS `sequence`. OPEN (not x402-gated) on purpose: honest outcome reporting
+    should be frictionless so the public track record can grow. The outcome is
+    written to HCS as a new message referencing the original sequence.
+    """
+    if req.outcome not in ("delivered", "failed", "flagged"):
+        raise HTTPException(status_code=400,
+                            detail="outcome must be delivered|failed|flagged")
+    att = _hcs.log_outcome(req.sequence, req.outcome, req.listing_id)
+    return {
+        "recorded": True,
+        "outcome": req.outcome,
+        "ref_sequence": req.sequence,
+        "receipt": _receipt(att),
+    }
+
+
+@app.get("/ledger")
+def ledger() -> dict:
+    """Siren's public accuracy track record, recomputed from HCS (mirror node in
+    live mode; the stub's in-memory topic otherwise)."""
+    return ledger_from_logger(_hcs)

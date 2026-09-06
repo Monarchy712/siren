@@ -37,6 +37,12 @@ def _flags(f: Features) -> list[dict]:
                 f"(similarity {f.near_dup_similarity:.2f}) and shares its operator address"
             ),
         })
+    if f.funding_cluster_risk:
+        sibs = ", ".join(f.funding_bad_sibling_ids) or "a flagged wallet"
+        flags.append({
+            "type": "funding_cluster_risk",
+            "detail": f"funded by the same wallet as {sibs} (flagged/high-risk)",
+        })
     return flags
 
 
@@ -60,6 +66,12 @@ def _reasons(f: Features, sufficiency: str, verdict: str) -> list[str]:
         reasons.append(
             "The listing is near-identical to another and shares its posting "
             "operator -- a possible duplicate/Sybil cluster."
+        )
+    if f.funding_cluster_risk:
+        sibs = ", ".join(f.funding_bad_sibling_ids) or "a flagged listing"
+        reasons.append(
+            f"This provider is funded by the same wallet as {sibs}, which Siren "
+            "has flagged -- a new service inherits the risk of its funding cluster."
         )
 
     if verdict == "low_risk" and not reasons:
@@ -86,6 +98,7 @@ def score_features(f: Features, model: RiskModel) -> dict:
         contradiction_fired=f.contradiction_fired,
         near_duplicate=f.near_duplicate,
         common_operator=f.common_operator,
+        funding_cluster_fired=bool(f.funding_cluster_risk),
     )
 
     return {

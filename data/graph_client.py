@@ -38,10 +38,39 @@ class BehavioralData:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class FundingLineage:
+    """A provider's on-chain funding lineage (Pillar 2).
+
+    `funder` is the address that first funded the provider (the subgraph's
+    `operator`). `siblings` are OTHER directory-listed addresses funded by that
+    same funder, each annotated with whether it is directory-listed and its
+    prior risk. `funder_is_utility` marks a high-fanout / shared-infrastructure
+    funder (faucet, exchange, deployer) through which risk is NOT propagated --
+    funding association is not guilt.
+    """
+    provider_address: str
+    funder: str | None
+    siblings: list[dict]        # [{address, listed_in_directory, prior_risk}]
+    funder_is_utility: bool
+    source: str                 # "hosted_subgraph" (real) / "stub" (mock)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 class GraphClient(Protocol):
     """Interface every behavioral-data source implements."""
 
     def behavioral(self, provider_address: str) -> BehavioralData:
+        ...
+
+    def funding_lineage(
+        self,
+        provider_address: str,
+        directory: list[dict] | None = None,
+        bad_addresses: set[str] | None = None,
+    ) -> FundingLineage:
         ...
 
 
@@ -71,6 +100,37 @@ _STUB_HISTORY: dict[str, dict] = {
 # A stable, fake-but-plausible freshness stamp for the stub.
 _STUB_BLOCK = 12_345_678
 _STUB_TIME = "2026-09-05T14:03:00Z"
+
+# Pillar 2 -- curated funding topology for the stub. Maps provider address ->
+# funder address. svc_02 (manipulated) and svc_08 (new first-day scam) share a
+# dedicated "bad" funder, so svc_08 inherits svc_02's risk; the honest listings
+# have their own funders. Mirrors what the real subgraph derives from `operator`.
+_STUB_FUNDERS: dict[str, str] = {
+    "0xA1b2C3d4E5f6000000000000000000000000AA01": "0xF17DE100000000000000000000000000000A01",  # svc_01 own
+    "0xA1b2C3d4E5f6000000000000000000000000BB02": "0xBADF17DE00000000000000000000000000B002",  # svc_02 bad cluster
+    "0xA1b2C3d4E5f6000000000000000000000000CC03": "0xF17DE100000000000000000000000000000C03",  # svc_03 own
+    "0xA1b2C3d4E5f6000000000000000000000000DD08": "0xBADF17DE00000000000000000000000000B002",  # svc_08 -> same as svc_02
+}
+
+# A funder that funds at least this many directory listings is treated as shared
+# infrastructure (faucet/exchange/deployer) and does NOT propagate risk.
+_UTILITY_FANOUT = int(_os.environ.get("SIREN_UTILITY_FANOUT", "3"))
+
+
+def _sibling_rows(funder, provider_address, directory, bad_addresses, funder_of):
+    """Directory listings (excluding self) sharing `funder`, annotated with risk."""
+    rows = []
+    for d in directory or []:
+        addr = d.get("provider_address")
+        if not addr or addr == provider_address:
+            continue
+        if funder_of(addr) == funder:
+            rows.append({
+                "address": addr,
+                "listed_in_directory": True,
+                "prior_risk": "high" if addr.lower() in bad_addresses else "low",
+            })
+    return rows
 
 
 class StubGraphClient:
@@ -102,6 +162,22 @@ class StubGraphClient:
             as_of_time=_STUB_TIME,
             source="stub",
         )
+
+    def funding_lineage(
+        self,
+        provider_address: str,
+        directory: list[dict] | None = None,
+        bad_addresses: set[str] | None = None,
+    ) -> FundingLineage:
+        bad = {a.lower() for a in (bad_addresses or set())}
+        funder = _STUB_FUNDERS.get(provider_address)
+        if funder is None:
+            return FundingLineage(provider_address, None, [], False, "stub")
+        siblings = _sibling_rows(funder, provider_address, directory, bad, _STUB_FUNDERS.get)
+        fanout = sum(1 for d in (directory or [])
+                     if _STUB_FUNDERS.get(d.get("provider_address")) == funder)
+        return FundingLineage(provider_address, funder, siblings,
+                              funder_is_utility=fanout >= _UTILITY_FANOUT, source="stub")
 
 
 # --------------------------------------------------------------------------- #
@@ -305,6 +381,65 @@ class SubgraphGraphClient:
             as_of_time=as_of_time,
             source="hosted_subgraph",
         )
+
+    def _utility_funders(self) -> set[str]:
+        raw = _os.environ.get("SIREN_UTILITY_FUNDERS", "")
+        return {a.strip().lower() for a in raw.split(",") if a.strip()}
+
+    def _accounts_by_operator(self, funder: str) -> list[str]:
+        query = "query($op: Bytes!){ accounts(where:{operator:$op}){ id } }"
+        body = _json.dumps({"query": query, "variables": {"op": funder.lower()}}).encode()
+        headers = {"content-type": "application/json", "user-agent": "siren-graph-client"}
+        if self.api_key:
+            headers["authorization"] = f"Bearer {self.api_key}"
+        req = _urlreq.Request(self.endpoint, data=body, headers=headers)
+        with _urlreq.urlopen(req, timeout=self.timeout) as resp:
+            payload = _json.loads(resp.read().decode())
+        if payload.get("errors"):
+            raise RuntimeError(f"Subgraph GraphQL errors: {payload['errors']}")
+        return [a["id"].lower() for a in payload.get("data", {}).get("accounts", [])]
+
+    def funding_lineage(
+        self,
+        provider_address: str,
+        directory: list[dict] | None = None,
+        bad_addresses: set[str] | None = None,
+    ) -> FundingLineage:
+        directory = directory or []
+        bad = {a.lower() for a in (bad_addresses or set())}
+
+        # funder = provider's operator (reuse the behavioral read).
+        data = self._post({"id": provider_address.lower()})
+        acct = data.get("account")
+        funder = acct.get("operator") if acct else None
+        if not funder:
+            return FundingLineage(provider_address, None, [], False, "hosted_subgraph")
+
+        dir_by_lower = {
+            d["provider_address"].lower(): d["provider_address"]
+            for d in directory if d.get("provider_address")
+        }
+        funded = self._accounts_by_operator(funder)
+        funded_in_dir = [a for a in funded if a in dir_by_lower]
+
+        # Shared-infrastructure funder (faucet/exchange/deployer): high fanout or
+        # env-listed. Risk is NOT propagated through it -- association is not guilt.
+        is_utility = (
+            funder.lower() in self._utility_funders()
+            or len(funded_in_dir) >= _UTILITY_FANOUT
+        )
+
+        siblings: list[dict] = []
+        if not is_utility:
+            for a in funded_in_dir:
+                if a == provider_address.lower():
+                    continue
+                siblings.append({
+                    "address": dir_by_lower[a],
+                    "listed_in_directory": True,
+                    "prior_risk": "high" if a in bad else "low",
+                })
+        return FundingLineage(provider_address, funder, siblings, is_utility, "hosted_subgraph")
 
 
 # --------------------------------------------------------------------------- #
