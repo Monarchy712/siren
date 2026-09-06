@@ -27,7 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hiero_sdk_python import Client, Network, AccountId, TransferTransaction, Hbar
 from hiero_sdk_python.transaction.transaction_id import TransactionId
+from localenv import load_local_env
 from service.hcs import key_from_string
+
+load_local_env()
 
 SCORE_URL = os.environ.get("SIREN_SCORE_URL", "http://localhost:8000/score")
 MIRROR = os.environ.get("HEDERA_MIRROR_URL", "https://testnet.mirrornode.hedera.com").rstrip("/")
@@ -116,6 +119,12 @@ def main() -> int:
         sys.exit(f"402 had no payment requirements: {body}")
     requirements = accepts[0]
     print(f"    402 requirements: {json.dumps(requirements)}")
+    if requirements.get("network") == "stub" or "extra" not in requirements:
+        sys.exit(
+            "Service is running the STUB x402 gate (no real payment requirements).\n"
+            "Restart it with env loaded so SIREN_PAYTO_ACCOUNT is set, e.g.:\n"
+            "  set -a && source .env && set +a && uvicorn service.app:app --port 8000"
+        )
 
     print("[2] Building partially-signed Hedera payment + retrying with X-PAYMENT")
     x_payment = build_x_payment(requirements, payer_id, payer_key)

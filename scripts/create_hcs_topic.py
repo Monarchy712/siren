@@ -13,7 +13,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hiero_sdk_python import Client, Network, AccountId, TopicCreateTransaction
+from localenv import load_local_env
 from service.hcs import key_from_string
+
+load_local_env()
 
 
 def main() -> int:

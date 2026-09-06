@@ -22,6 +22,11 @@ _SIREN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SIREN_ROOT not in sys.path:
     sys.path.insert(0, _SIREN_ROOT)
 
+# Load siren/.env before wiring gate/graph/HCS from env, so `uvicorn service.app`
+# runs live without a manual `set -a && source .env` step.
+from localenv import load_local_env
+load_local_env()
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
