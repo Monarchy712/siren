@@ -33,14 +33,21 @@ from localenv import load_local_env
 load_local_env()
 
 RPC = os.environ.get("SIREN_BASE_RPC_URL", "https://sepolia.base.org")
+# Signer: either a keystore alias (BAD_FUNDER_ACCOUNT, e.g. reuse siren_suspicious
+# = svc_02; set CAST_PASSWORD to avoid an interactive prompt) OR a raw key
+# (BAD_FUNDER_KEY, for a fresh dedicated bad funder).
+ACCOUNT = os.environ.get("BAD_FUNDER_ACCOUNT", "").strip()
 KEY = os.environ.get("BAD_FUNDER_KEY", "").strip()
 TOKEN = os.environ.get("TOKEN", "").strip()
 SVC08 = os.environ.get("SVC08", "").strip()
 SIB = os.environ.get("SVC08_SIBLING", "").strip()
 
-# Whole-token amounts sent to each fresh wallet (18 decimals).
-AMOUNT_SVC08 = os.environ.get("SVC08_AMOUNT", "3000")
-AMOUNT_SIB = os.environ.get("SVC08_SIBLING_AMOUNT", "3000")
+_SIGNER = ["--account", ACCOUNT] if ACCOUNT else (["--private-key", KEY] if KEY else None)
+
+# Whole-token amounts sent to each fresh wallet (18 decimals). The funding EDGE
+# is what matters, not the size, so keep it small.
+AMOUNT_SVC08 = os.environ.get("SVC08_AMOUNT", "1000")
+AMOUNT_SIB = os.environ.get("SVC08_SIBLING_AMOUNT", "1000")
 
 
 def cast(*args: str) -> str:
@@ -49,12 +56,15 @@ def cast(*args: str) -> str:
 
 def main() -> int:
     missing = [k for k, v in {
-        "BAD_FUNDER_KEY": KEY, "TOKEN": TOKEN, "SVC08": SVC08, "SVC08_SIBLING": SIB,
+        "TOKEN": TOKEN, "SVC08": SVC08, "SVC08_SIBLING": SIB,
     }.items() if not v]
     if missing:
         sys.exit(f"Set these in siren/.env first: {', '.join(missing)}")
+    if _SIGNER is None:
+        sys.exit("Set BAD_FUNDER_ACCOUNT (keystore alias, e.g. siren_suspicious) "
+                 "or BAD_FUNDER_KEY (raw key) for the bad funder.")
 
-    bad_funder = cast("wallet", "address", "--private-key", KEY)
+    bad_funder = cast("wallet", "address", *_SIGNER)
     print(f"Bad funder : {bad_funder}")
     print(f"svc_08     : {SVC08}")
     print(f"svc_09 sib : {SIB}")
@@ -77,7 +87,7 @@ def main() -> int:
         wei = cast("to-wei", amount_tokens)
         print(f"\n>> bad_funder -> {to} : {amount_tokens} SIRENTEST")
         out = cast("send", TOKEN, "transfer(address,uint256)", to, wei,
-                   "--rpc-url", RPC, "--private-key", KEY, "--json")
+                   "--rpc-url", RPC, *_SIGNER, "--json")
         import json
         d = json.loads(out)
         block = d.get("blockNumber")
