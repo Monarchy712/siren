@@ -87,6 +87,49 @@ def _reasons(f: Features, sufficiency: str, verdict: str) -> list[str]:
     return reasons
 
 
+def _evidence_detail(f: Features) -> dict:
+    """Structured evidence for presentation surfaces (Console hero panels).
+
+    Additive to the SPEC section 6 shape: the machine `flags`/human `reasons`
+    stay authoritative; this block just exposes the same underlying values in a
+    typed form so the claim-vs-chain confrontation and the funding-lineage graph
+    can render exact data (claimed phrases, chain reads, funder/sibling nodes)
+    instead of parsing sentences. Nothing here affects the verdict.
+    """
+    return {
+        # What the listing asserts vs what the chain actually shows.
+        "claim": {
+            "asserted": bool(f.claim_strength),
+            "phrases": list(f.claim_phrases),
+            "contradiction_fired": bool(f.contradiction_fired),
+        },
+        "chain": {
+            "wallet_age_days": f.wallet_age_days,
+            "tx_count": f.tx_count,
+            "age_min": AGE_MIN,
+            "tx_min": TX_MIN,
+        },
+        "pricing": {
+            "price_usd": f.price_usd,
+            "median_price": round(f.median_price, 6),
+            "pct_below_median": (
+                round(-f.price_dev_signed * 100, 1) if f.price_dev_signed < 0 else 0.0
+            ),
+        },
+        # Funding-lineage graph: provider <- funder -> flagged sibling(s).
+        "funding": {
+            "funder": f.funding_funder,
+            "cluster_risk": bool(f.funding_cluster_risk),
+            "flagged_sibling_ids": list(f.funding_bad_sibling_ids),
+        },
+        "near_duplicate": {
+            "similarity": f.near_dup_similarity,
+            "match_listing_id": f.near_dup_match_id,
+            "common_operator": bool(f.common_operator),
+        },
+    }
+
+
 def score_features(f: Features, model: RiskModel) -> dict:
     """Score a pre-extracted Features object. Returns SPEC section 6 shape."""
     risk_score = round(model.risk_score(f.vector), 4)
@@ -109,6 +152,7 @@ def score_features(f: Features, model: RiskModel) -> dict:
         "verdict": result.verdict,
         "flags": _flags(f),
         "reasons": _reasons(f, result.evidence_sufficiency, result.verdict),
+        "evidence_detail": _evidence_detail(f),
         "signal_freshness": {
             "as_of_block": f.as_of_block,
             "as_of_time": f.as_of_time,
@@ -121,7 +165,7 @@ def score_features(f: Features, model: RiskModel) -> dict:
 def score_listing(
     listing: dict, corpus: list[dict], graph: GraphClient, model: RiskModel
 ) -> dict:
-    """Full path: extract the 7 features for `listing`, then score."""
+    """Full path: extract the 8 features for `listing`, then score."""
     f = extract_features(listing, corpus, graph)
     return score_features(f, model)
 

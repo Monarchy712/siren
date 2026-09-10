@@ -181,7 +181,7 @@ class StubGraphClient:
 
 
 # --------------------------------------------------------------------------- #
-# Real implementation -- TODO: wire to a live hosted subgraph.
+# Real implementation: backed by a live hosted subgraph (config via env).
 # --------------------------------------------------------------------------- #
 
 _BEHAVIORAL_QUERY = """

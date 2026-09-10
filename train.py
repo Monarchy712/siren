@@ -4,7 +4,7 @@
 
 Uses the tiny semi-synthetic dataset in data/training_data.py. HONEST framing
 (SPEC section 0): this does NOT establish real-world fraud accuracy -- it fits
-inspectable coefficients that turn the 7 features into an explainable risk_score.
+inspectable coefficients that turn the 8 features into an explainable risk_score.
 """
 from __future__ import annotations
 

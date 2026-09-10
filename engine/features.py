@@ -1,4 +1,4 @@
-"""Feature extraction -- exactly the 7 MVP features from SPEC section 4. No more.
+"""Feature extraction -- the 8 features (text, behavior, derived, funding).
 
 Text (3):     price-vs-directory-median, near-duplicate similarity, claim-strength
 Behavior (2): wallet age, activity level (tx count)     [from GraphClient]
@@ -124,7 +124,7 @@ def _near_duplicate(
 def extract_features(
     listing: dict, corpus: list[dict], graph: GraphClient
 ) -> Features:
-    """Assemble the 7 features for one listing from fixture text + live chain read."""
+    """Assemble the 8 features for one listing from fixture text + live chain read."""
     # --- Text: price vs directory median ------------------------------------
     median = _price_median(corpus)
     price = float(listing["price_usd"])

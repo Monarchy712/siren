@@ -1,6 +1,6 @@
 """Logistic Regression wrapper (SPEC section 5).
 
-The trained LR maps the 7-feature vector -> one risk_score in [0,1]. LR is chosen
+The trained LR maps the 8-feature vector -> one risk_score in [0,1]. LR is chosen
 deliberately: tiny semi-synthetic dataset, explainability is the product
 (coefficients -> reasons), decision-support not ML research.
 

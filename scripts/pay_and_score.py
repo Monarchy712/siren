@@ -28,7 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hiero_sdk_python import Client, Network, AccountId, TransferTransaction, Hbar
 from hiero_sdk_python.transaction.transaction_id import TransactionId
 from localenv import load_local_env
-from service.hcs import key_from_string
+from service.hcs import hashscan_topic_url, key_from_string
+from agent import wire
 
 load_local_env()
 
@@ -102,14 +103,15 @@ def verify_on_mirror(topic_id: str, sequence: int, attempts: int = 10) -> dict:
     raise SystemExit("Mirror node did not surface the message in time; retry later.")
 
 
-def main() -> int:
-    listing_id = sys.argv[1] if len(sys.argv) > 1 else "svc_02"
-    payer_id = os.environ.get("HEDERA_PAYER_ID", "").strip()
-    payer_key = os.environ.get("HEDERA_PAYER_KEY", "").strip()
-    if not (payer_id and payer_key):
-        sys.exit("Set HEDERA_PAYER_ID and HEDERA_PAYER_KEY (funded testnet account).")
+def run_beat(listing_id: str, payer_id: str, payer_key: str) -> int:
+    """The styled live payment beat: 402 -> sign -> 200 -> settle -> HCS write ->
+    mirror-node round-trip. No manual input — it runs start to finish in one take.
+    Returns 0 when the on-chain round-trip matches the returned verdict.
+    """
+    wire.header(f"x402 handshake  ·  {listing_id}")
 
-    print(f"[1] POST {SCORE_URL} (no payment) -> expect 402")
+    # --- 1) unpaid request -> 402 payment required --------------------------
+    wire.step(f"POST {SCORE_URL}  " + wire.muted("(no payment)"))
     status, body = _post(SCORE_URL, {"listing_id": listing_id}, {})
     if status != 402:
         sys.exit(f"Expected 402, got {status}: {body}")
@@ -118,7 +120,9 @@ def main() -> int:
     if not accepts:
         sys.exit(f"402 had no payment requirements: {body}")
     requirements = accepts[0]
-    print(f"    402 requirements: {json.dumps(requirements)}")
+    wire.status(402, "Payment Required")
+    wire.kv("pay to", requirements.get("payTo", "—"), dim=True)
+    wire.kv("amount", f"{requirements.get('amount','—')} {requirements.get('asset','')}".strip(), dim=True)
     if requirements.get("network") == "stub" or "extra" not in requirements:
         sys.exit(
             "Service is running the STUB x402 gate (no real payment requirements).\n"
@@ -126,27 +130,48 @@ def main() -> int:
             "  set -a && source .env && set +a && uvicorn service.app:app --port 8000"
         )
 
-    print("[2] Building partially-signed Hedera payment + retrying with X-PAYMENT")
+    # --- 2) pay: signed Hedera transfer, retry with X-PAYMENT ---------------
+    wire.step("sign Hedera payment  " + wire.muted("(x402 exact scheme, payer-signed)"))
     x_payment = build_x_payment(requirements, payer_id, payer_key)
     status, verdict = _post(SCORE_URL, {"listing_id": listing_id}, {"x-payment": x_payment})
     if status != 200:
         sys.exit(f"Paid call failed ({status}): {json.dumps(verdict, indent=2)}")
     att = verdict.get("attestation", {})
     pay = verdict.get("payment", {})
-    print(f"    200 verdict: {verdict['listing_id']} -> {verdict['verdict']} "
-          f"({verdict['evidence_sufficiency']})")
-    print(f"    payment: settled via {pay.get('source')} tx={pay.get('tx_ref')}")
-    print(f"    attestation: topic {att.get('hcs_topic')} seq {att.get('sequence')} "
-          f"hash {att.get('message_hash','')[:16]}...")
+    wire.status(200, "OK  ·  payment settled")
+    wire.kv("settled via", f"{pay.get('source')}  tx {pay.get('tx_ref')}", dim=True)
 
-    print("[3] Reading the verdict back off HCS via mirror node")
+    wire.header("Verdict")
+    print("  " + wire.verdict(verdict["verdict"])
+          + wire.muted(f"    evidence {verdict['evidence_sufficiency']}"))
+    print("  " + wire.risk_bar(verdict["risk_score"], verdict["verdict"]))
+
+    # --- 3) the on-chain write (topic/seq + full HashScan URL) --------------
+    wire.header("On-chain record")
+    hs = hashscan_topic_url(NETWORK, att["hcs_topic"])
+    wire.onchain(att.get("hcs_topic"), att.get("sequence"), hs)
+
+    # --- 4) independent read-back off the mirror node -----------------------
+    wire.step("read the verdict back off HCS  " + wire.muted("(mirror node)"))
     read = verify_on_mirror(att["hcs_topic"], att["sequence"])
-    print(f"    consensus_timestamp: {read.get('consensus_timestamp')}")
-    print(f"    message on-topic   : {json.dumps(read['decoded'])}")
     match = read["decoded"].get("verdict") == verdict["verdict"] and \
         read["decoded"].get("listing_id") == verdict["listing_id"]
-    print(f"    round-trip match   : {'YES' if match else 'NO'}")
+    wire.kv("consensus at", str(read.get("consensus_timestamp")), dim=True)
+    if match:
+        print("  " + wire.ok("✓") + wire.text(" round-trip verified — on-chain record matches the returned verdict"))
+    else:
+        print("  " + wire.muted("round-trip mismatch"))
+    print()
     return 0 if match else 1
+
+
+def main() -> int:
+    listing_id = sys.argv[1] if len(sys.argv) > 1 else "svc_02"
+    payer_id = os.environ.get("HEDERA_PAYER_ID", "").strip()
+    payer_key = os.environ.get("HEDERA_PAYER_KEY", "").strip()
+    if not (payer_id and payer_key):
+        sys.exit("Set HEDERA_PAYER_ID and HEDERA_PAYER_KEY (funded testnet account).")
+    return run_beat(listing_id, payer_id, payer_key)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Siren — Signal Console</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1l6 3v4c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7V4z' fill='%234ea8de'/></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2l8 4v5c0 5-3.4 8.3-8 9.5C7.4 19.3 4 16 4 11V6z"
+            stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M9 12l2 2 4-4.5" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <div>
+        <div class="brand-name">Siren</div>
+        <div class="brand-sub">Signal Console</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav" aria-label="Screens">
+      <button class="nav-btn" data-screen="directory" aria-current="true">
+        <span class="step-no">01</span> Directory
+      </button>
+      <button class="nav-btn" data-screen="firstday">
+        <span class="step-no">02</span> First-day scam
+      </button>
+      <button class="nav-btn" data-screen="ledger">
+        <span class="step-no">03</span> Receipt &amp; ledger
+      </button>
+    </nav>
+
+    <span class="topbar-spacer"></span>
+
+    <div class="env-toggle" title="Data source for this session">
+      <span>source</span>
+      <span class="switch" id="env-switch" data-on="false" role="switch"
+        aria-checked="false" tabindex="0" aria-label="Toggle data source"></span>
+      <span class="env-name" id="env-name">live</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Screen 1 — Directory & A/B (claim-vs-chain) -->
+    <section class="screen active" id="screen-directory" data-screen="directory"></section>
+
+    <!-- Screen 2 — First-day scam (centerpiece) -->
+    <section class="screen" id="screen-firstday" data-screen="firstday"></section>
+
+    <!-- Screen 3 — Receipt & ledger -->
+    <section class="screen" id="screen-ledger" data-screen="ledger"></section>
+  </main>
+
+  <footer class="footer">
+    <span>Every verdict is written to Hedera Consensus Service. You verify it; you don't trust it.</span>
+    <span id="footer-source" class="mono"></span>
+  </footer>
+
+  <script src="stub.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

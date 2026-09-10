@@ -1,9 +1,9 @@
-# Siren — Base Sepolia behavioral activity (disposable ERC-20)
+# Siren, Base Sepolia behavioral activity (disposable ERC-20)
 
 Purpose: create clean, indexable **ERC-20 `Transfer`** activity on Base Sepolia
 for Siren's three demo provider wallets, so a subgraph can compute behavioral
 features. Native ETH transfers do not emit `Transfer` logs, which is why this
-token exists. This is **disposable testnet infra** — no production claims.
+token exists. This is **disposable testnet infra**, no production claims.
 
 Tooling: **Foundry**. No Hardhat, no Substreams, no subgraph here.
 
@@ -61,7 +61,7 @@ cast wallet import siren_new         --interactive
 cd siren/onchain && export TOKEN=0x<deployed> && bash seed.sh
 ```
 
-Writes `seed_log.tsv` (phase, from, to, amount, tx hash, block) — gitignored.
+Writes `seed_log.tsv` (phase, from, to, amount, tx hash, block), gitignored.
 
 ### 5. Verify (read-only)
 
@@ -69,7 +69,7 @@ Writes `seed_log.tsv` (phase, from, to, amount, tx hash, block) — gitignored.
 TOKEN=$TOKEN FROM_BLOCK=<deploy_block> python3 verify.py
 ```
 
-## Intended activity shape (observable only — no verdict is encoded)
+## Intended activity shape (observable only, no verdict is encoded)
 
 | Provider | inbound | outbound | ~tx_count | ~unique counterparties | shape |
 |---|---|---|---|---|---|
@@ -93,5 +93,5 @@ created; the risk engine is untouched.
 
 The subgraph indexes only this token's transfers. Wallet age used by the engine
 is therefore read from real on-chain first-seen (native + token) via RPC, not
-from token first-seen. Do not backdate or present this activity as historical —
-it isn't.
+from token first-seen. Do not backdate or present this activity as historical.
+It isn't.
